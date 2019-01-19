@@ -13,7 +13,7 @@ const CONFIG = {
   },
   ui: {
     ssl: false,
-    host: 'localhost',
+    host: '18.228.118.134',
     port: 3000,
     path: '/'
   },
