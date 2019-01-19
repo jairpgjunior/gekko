@@ -229,7 +229,18 @@ var plugins = [
     async: false,
     modes: ['realtime'],
     greedy: true
-  }
+  },
+  {
+    name: 'Google Forms',
+    description: 'Logs Trades to Google Forms',
+    slug: 'gforms',
+    async: false,
+    modes: ['realtime'],
+    dependencies: [{
+      module: 'request',
+      version: '2.85.0'
+    }]
+},
 ];
 
 module.exports = plugins;

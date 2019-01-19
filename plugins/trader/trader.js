@@ -3,9 +3,13 @@ const util = require('../../core/util.js');
 const config = util.getConfig();
 const dirs = util.dirs();
 const moment = require('moment');
+const fsw = require('fs');
 
 const log = require(dirs.core + 'log');
 const Broker = require(dirs.broker + '/gekkoBroker');
+
+var headerset = '';
+var currentBalance = 10.0;
 
 require(dirs.gekko + '/exchange/dependencyCheck');
 
@@ -107,7 +111,11 @@ Trader.prototype.setPortfolio = function() {
 }
 
 Trader.prototype.setBalance = function() {
-  this.balance = this.portfolio.currency + this.portfolio.asset * this.price;
+  if (this.portfolio.currency > currentBalance) {
+    this.balance = currentBalance + this.portfolio.asset * this.price;
+  } else {
+    this.balance = this.portfolio.currency + this.portfolio.asset * this.price;
+  }
   this.exposure = (this.portfolio.asset * this.price) / this.balance;
   // if more than 10% of balance is in asset we are exposed
   this.exposed = this.exposure > 0.1;
@@ -181,7 +189,11 @@ Trader.prototype.processAdvice = function(advice) {
       });
     }
 
-    amount = this.portfolio.currency / this.price * 0.95;
+    if (this.portfolio.currency < currentBalance) {
+      amount = this.portfolio.currency / this.price * 0.99;
+    } else {
+      amount = currentBalance / this.price * 0.99;
+    }
 
     log.info(
       'Trader',
@@ -293,8 +305,14 @@ Trader.prototype.createOrder = function(side, amount, advice, id) {
           reason: err.message
         });
       }
+      
+      // If summary.price is 0, do not report as the info inisde summary is useless
+      if (summary.price != 0 && summary.amount != 0) {
+        log.remote(side + '\n' + summary.price + '\n' + summary.amount + '\n' + summary.date.format('llll'));
+        currentBalance = summary.price * summary.amount;
+        log.debug('Current Limit Balance: ', currentBalance);
+      }
 
-      log.info('[ORDER] summary:', summary);
       this.order = null;
       this.sync(() => {
 
@@ -315,6 +333,25 @@ Trader.prototype.createOrder = function(side, amount, advice, id) {
           effectivePrice = summary.price;
         }
 
+        grreadtime = summary.date.format('l LT');
+
+        headertxt = "date,price,amount,side\n";
+
+        outtxt = grreadtime + "," + summary.price + "," + summary.amount + "," + side + "\n";
+
+        if(headerset==""){
+
+          fsw.appendFileSync("blotter.csv", headertxt, encoding='utf8'); 
+          headerset = "1";
+
+        }
+
+        // If summary.price is 0, do not report as the info inisde summary is useless
+        if (summary.price != 0 && summary.amount != 0)
+          fsw.appendFileSync("blotter.csv", outtxt, encoding='utf8');
+
+        outtxt = "";
+
         this.deferredEmit('tradeCompleted', {
           id,
           adviceId: advice.id,
@@ -329,6 +366,8 @@ Trader.prototype.createOrder = function(side, amount, advice, id) {
           effectivePrice
         });
 
+
+
         if(
           side === 'buy' &&
           advice.trigger &&
@@ -340,7 +379,7 @@ Trader.prototype.createOrder = function(side, amount, advice, id) {
           this.deferredEmit('triggerCreated', {
             id: triggerId,
             at: advice.date,
-            type: 'trailingStop',
+            type: 'trialingStop',
             properties: {
               trail: trigger.trailValue,
               initialPrice: summary.price,
@@ -407,6 +446,50 @@ Trader.prototype.cancelOrder = function(id, advice, next) {
     });
     this.sync(next);
   });
+}
+
+Trader.prototype.processCommand = function (cmd) {
+  
+  if (cmd.command == 'portfolio') {
+    cmd.handled = true;
+
+    this.setTicker(() => {
+      var message = "Portfolio:\n";
+      var value = 0.0;
+      var price = this.ticker.bid;
+      _.each(this.portfolio, function (fund) {
+        var isAsset = fund.name == config.watch.asset;
+        var amount = parseFloat(fund.amount);
+        message += fund.name + ': ' + amount.toFixed(isAsset ? 6 : 2) + "\n";
+        if (isAsset) {
+          value += amount * price;
+        } else {
+          value += amount;
+        }
+      }.bind(this));
+
+      message += "\nTotal value: " + value.toFixed(2);
+      log.remote(message);
+
+    });
+  }
+  else if (cmd.command == 'price') {
+    cmd.handled = true;
+
+    var logPrice = function() {
+      var message = ['Current price at ', config.watch.exchange, ' ',
+        config.watch.currency, '/', config.watch.asset, ' is ',
+        this.ticker.bid, ' ', config.watch.currency, ' (bid) ',
+        this.ticker.ask, ' ', config.watch.currency, ' (ask) ',
+        this.candlePrice, ' ', config.watch.currency, ' (candle close, ', this.candlePriceTime.fromNow(),
+        ')'
+      ].join('');
+
+      log.remote(message);
+    }.bind(this);
+
+    this.setTicker(logPrice);
+  }
 }
 
 module.exports = Trader;
